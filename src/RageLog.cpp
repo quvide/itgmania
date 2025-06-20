@@ -70,7 +70,7 @@ static RageMutex *g_Mutex;
  * crashlog gets log.txt */
 enum
 {
-	/* If this is set, the message will also be written to info.txt. (info and warnings) */
+	/* If this is set, the message will also be written to stdout and info.txt. (info and warnings) */
 	WRITE_TO_INFO = 0x01,
 
 	/* If this is set, the message will also be written to userlog.txt. (user warnings only) */
