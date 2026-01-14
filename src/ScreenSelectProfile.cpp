@@ -216,9 +216,12 @@ bool ScreenSelectProfile::Finish() {
   // all ok - load profiles and go to next screen
   FOREACH_PlayerNumber(p) {
     if (m_iSelectedProfiles[p] > 0) {
-      PROFILEMAN->m_sDefaultLocalProfileID[p].Set(
-          PROFILEMAN->GetLocalProfileIDFromIndex(m_iSelectedProfiles[p] - 1));
-      PROFILEMAN->LoadLocalProfileFromMachine(p);
+      std::string sProfileID =
+          PROFILEMAN->GetLocalProfileIDFromIndex(m_iSelectedProfiles[p] - 1);
+      if (LuaHelpers::GetThemePref("AutoSetDefaultProfile", true)) {
+        PROFILEMAN->m_sDefaultLocalProfileID[p].Set(sProfileID);
+      }
+      PROFILEMAN->LoadLocalProfileFromMachine(p, sProfileID);
       GAMESTATE->LoadCurrentSettingsFromProfile(p);
     }
     if (m_iSelectedProfiles[p] == 0) {
