@@ -1,6 +1,7 @@
 #ifndef LUA_MANAGER_H
 #define LUA_MANAGER_H
 
+#include "RageLog.h"
 #include "global.h"
 struct lua_State;
 typedef lua_State Lua;
@@ -172,6 +173,32 @@ inline int AbsIndex(Lua* L, int i) {
     return i;
   }
   return lua_gettop(L) + i + 1;
+}
+
+template <class T>
+T GetThemePref(const std::string& name, const T& fallbackValue) {
+  const char* allowedChars =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      "abcdefghijklmnopqrstuvwxyz"
+      "0123456789";
+  if (name.find_first_not_of(allowedChars) != std::string::npos) {
+    LOG->Warn(
+        "LuaHelpers::GetThemePref: Invalid preference name: \"%s\"",
+        name.c_str());
+    return fallbackValue;
+  }
+
+  Lua* L = LUA->Get();
+  T result;
+  if (!LuaHelpers::RunExpression(L, "ThemePrefs.Get(\"" + name + "\")")) {
+    lua_pop(L, 1);
+    result = fallbackValue;
+  } else if (!LuaHelpers::Pop(L, result)) {
+    result = fallbackValue;
+  }
+  LUA->Release(L);
+
+  return result;
 }
 }  // namespace LuaHelpers
 
