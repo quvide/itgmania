@@ -14,7 +14,8 @@ set(CPACK_RESOURCE_FILE_README "${SM_ROOT_DIR}/README.md")
 set(CPACK_RESOURCE_FILE_LICENSE "${SM_CMAKE_DIR}/license_install.txt")
 
 if(WIN32)
-  set(CPACK_GENERATOR NSIS)
+  # NSIS produces the .exe installer; ZIP produces a portable .zip of the same payload.
+  set(CPACK_GENERATOR NSIS ZIP)
   set(CPACK_SYSTEM_NAME "Windows")
 
   # By setting these install keys manually, The default directory of "StepMania
