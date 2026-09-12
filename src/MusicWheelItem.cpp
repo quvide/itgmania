@@ -1,4 +1,5 @@
 #include "MusicWheelItem.h"
+#include "ProfLite.h"
 
 #include <string>
 
@@ -188,7 +189,9 @@ MusicWheelItem::~MusicWheelItem() {
 void MusicWheelItem::LoadFromWheelItemData(
     const WheelItemBaseData* pData, int iIndex, bool bHasFocus,
     int iDrawIndex) {
+  PROF_SCOPE("Wheel.Item.Load");
   WheelItemBase::LoadFromWheelItemData(pData, iIndex, bHasFocus, iDrawIndex);
+  m_bHasFocus = bHasFocus;
 
   const MusicWheelItemData* pWID =
       dynamic_cast<const MusicWheelItemData*>(pData);
@@ -219,7 +222,10 @@ void MusicWheelItem::LoadFromWheelItemData(
     case WheelItemDataType_Song:
       type = MusicWheelItemType_Song;
 
-      m_TextBanner.SetFromSong(pWID->m_pSong);
+      {
+        PROF_SCOPE("Wheel.Item.TextBanner");
+        m_TextBanner.SetFromSong(pWID->m_pSong);
+      }
       // We can do this manually if we wanted... maybe have a metric for
       // overrides? -aj
       m_TextBanner.SetDiffuse(pWID->m_color);
@@ -344,11 +350,19 @@ void MusicWheelItem::LoadFromWheelItemData(
     msg.SetParam(
         "IsParentSection", pWID->m_Type == WheelItemDataType_ParentSection);
 
-    this->HandleMessage(msg);
+    {
+      PROF_SCOPE("Wheel.Item.SetMsg(Lua)");
+      DispatchSet(msg);
+    }
   }
+
+  // Everything above is a full refresh; drop any refresh queued by a broadcast.
+  m_bRefreshPending = false;
+  RecordSelectionKeys();
 }
 
 void MusicWheelItem::RefreshGrades() {
+  PROF_SCOPE("Wheel.Item.RefreshGrades");
   if (!IsLoaded()) {
     return;
   }
@@ -438,69 +452,152 @@ void MusicWheelItem::HandleMessage(const Message& msg) {
       msg == Message_PreferredDifficultyP1Changed ||
       msg == Message_PreferredDifficultyP2Changed ||
       msg == Message_PlayerProfileSet) {
-    const MusicWheelItemData* pWID =
-        dynamic_cast<const MusicWheelItemData*>(m_pData);
-    MusicWheelItemType type = MusicWheelItemType_Invalid;
-
-    switch (pWID->m_Type) {
-      DEFAULT_FAIL(pWID->m_Type);
-      case WheelItemDataType_Song:
-        type = MusicWheelItemType_Song;
-        break;
-      case WheelItemDataType_Section:
-        if (GAMESTATE->sExpandedSectionName == pWID->m_sText) {
-          type = MusicWheelItemType_SectionExpanded;
-        } else {
-          type = MusicWheelItemType_SectionCollapsed;
-        }
-        break;
-      case WheelItemDataType_ParentSection:
-        if (GAMESTATE->sExpandedParentSectionName == pWID->m_sText) {
-          type = MusicWheelItemType_ParentExpanded;
-        } else {
-          type = MusicWheelItemType_ParentCollapsed;
-        }
-        break;
-      case WheelItemDataType_Course:
-        type = MusicWheelItemType_Course;
-        break;
-      case WheelItemDataType_Sort:
-        if (pWID->m_pAction->m_pm != PlayMode_Invalid) {
-          type = MusicWheelItemType_Mode;
-        } else {
-          type = MusicWheelItemType_Sort;
-        }
-        break;
-      case WheelItemDataType_Roulette:
-        type = MusicWheelItemType_Roulette;
-        break;
-      case WheelItemDataType_Random:
-        type = MusicWheelItemType_Random;
-        break;
-      case WheelItemDataType_Portal:
-        type = MusicWheelItemType_Portal;
-        break;
-      case WheelItemDataType_Custom:
-        type = MusicWheelItemType_Custom;
-        break;
+    // One wheel step broadcasts several of these back to back. Coalesce them
+    // into a single refresh on the next Update.
+    m_bRefreshPending = true;
+    if (msg == Message_PlayerProfileSet) {
+      // A profile change alters grades without changing difficulty or steps
+      // type, so the selection-key check below cannot detect it.
+      m_bForceRefresh = true;
     }
-
-    Message setMsg("Set");
-    setMsg.SetParam("Song", pWID->m_pSong);
-    setMsg.SetParam("Course", pWID->m_pCourse);
-    setMsg.SetParam("Text", pWID->m_sText);
-    setMsg.SetParam("Type", MusicWheelItemTypeToString(type));
-    setMsg.SetParam("Color", pWID->m_color);
-    setMsg.SetParam("Label", pWID->m_sLabel);
-    setMsg.SetParam("ParentSection", pWID->m_sParentSection);
-    setMsg.SetParam(
-        "IsParentSection", pWID->m_Type == WheelItemDataType_ParentSection);
-    this->HandleMessage(setMsg);
-
-    RefreshGrades();
   }
 
   WheelItemBase::HandleMessage(msg);
+}
+
+void MusicWheelItem::Update(float fDeltaTime) {
+  if (m_bRefreshPending) {
+    m_bRefreshPending = false;
+    if (IsLoaded()) {
+      // On a scroll step the current steps change because the song changed,
+      // not because the player picked another difficulty. The rebuild that
+      // preceded the broadcasts already produced the right contents for that
+      // case, so only refresh when something the contents depend on differs.
+      // The focused item always refreshes: its Lua children may key off the
+      // exact selected Steps object (edits), which only it can observe.
+      bool changed = m_bForceRefresh || m_bHasFocus;
+      if (!changed) {
+        FOREACH_PlayerNumber(p) {
+          Difficulty dc;
+          StepsType st;
+          GetPlayerSelectionKey(p, dc, st);
+          if (dc != m_LastDifficulty[p] || st != m_LastStepsType[p]) {
+            changed = true;
+            break;
+          }
+        }
+      }
+      if (changed) {
+        RefreshFromGameState();
+      } else {
+        PROF_COUNT("Wheel.Item.RefreshSkipped", 1);
+      }
+    }
+    m_bForceRefresh = false;
+  }
+  WheelItemBase::Update(fDeltaTime);
+}
+
+void MusicWheelItem::GetPlayerSelectionKey(
+    PlayerNumber p, Difficulty& dc, StepsType& st) const {
+  if (GAMESTATE->m_pCurSteps[p]) {
+    dc = GAMESTATE->m_pCurSteps[p]->GetDifficulty();
+    st = GAMESTATE->m_pCurSteps[p]->m_StepsType;
+  } else if (GAMESTATE->m_pCurTrail[p]) {
+    dc = GAMESTATE->m_pCurTrail[p]->m_CourseDifficulty;
+    st = GAMESTATE->m_pCurTrail[p]->m_StepsType;
+  } else {
+    dc = GAMESTATE->m_PreferredDifficulty[p];
+    const Style* pStyle = GAMESTATE->GetCurrentStyle(PLAYER_INVALID);
+    st = pStyle ? pStyle->m_StepsType : StepsType_Invalid;
+  }
+}
+
+void MusicWheelItem::RecordSelectionKeys() {
+  FOREACH_PlayerNumber(p) {
+    GetPlayerSelectionKey(p, m_LastDifficulty[p], m_LastStepsType[p]);
+  }
+}
+
+void MusicWheelItem::RefreshFromGameState() {
+  PROF_SCOPE("Wheel.Item.Refresh(Set+Grades)");
+  const MusicWheelItemData* pWID =
+      dynamic_cast<const MusicWheelItemData*>(m_pData);
+  MusicWheelItemType type = MusicWheelItemType_Invalid;
+
+  switch (pWID->m_Type) {
+    DEFAULT_FAIL(pWID->m_Type);
+    case WheelItemDataType_Song:
+      type = MusicWheelItemType_Song;
+      break;
+    case WheelItemDataType_Section:
+      if (GAMESTATE->sExpandedSectionName == pWID->m_sText) {
+        type = MusicWheelItemType_SectionExpanded;
+      } else {
+        type = MusicWheelItemType_SectionCollapsed;
+      }
+      break;
+    case WheelItemDataType_ParentSection:
+      if (GAMESTATE->sExpandedParentSectionName == pWID->m_sText) {
+        type = MusicWheelItemType_ParentExpanded;
+      } else {
+        type = MusicWheelItemType_ParentCollapsed;
+      }
+      break;
+    case WheelItemDataType_Course:
+      type = MusicWheelItemType_Course;
+      break;
+    case WheelItemDataType_Sort:
+      if (pWID->m_pAction->m_pm != PlayMode_Invalid) {
+        type = MusicWheelItemType_Mode;
+      } else {
+        type = MusicWheelItemType_Sort;
+      }
+      break;
+    case WheelItemDataType_Roulette:
+      type = MusicWheelItemType_Roulette;
+      break;
+    case WheelItemDataType_Random:
+      type = MusicWheelItemType_Random;
+      break;
+    case WheelItemDataType_Portal:
+      type = MusicWheelItemType_Portal;
+      break;
+    case WheelItemDataType_Custom:
+      type = MusicWheelItemType_Custom;
+      break;
+  }
+
+  Message setMsg("Set");
+  setMsg.SetParam("Song", pWID->m_pSong);
+  setMsg.SetParam("Course", pWID->m_pCourse);
+  setMsg.SetParam("Text", pWID->m_sText);
+  setMsg.SetParam("Type", MusicWheelItemTypeToString(type));
+  setMsg.SetParam("Color", pWID->m_color);
+  setMsg.SetParam("Label", pWID->m_sLabel);
+  setMsg.SetParam("ParentSection", pWID->m_sParentSection);
+  setMsg.SetParam(
+      "IsParentSection", pWID->m_Type == WheelItemDataType_ParentSection);
+  DispatchSet(setMsg);
+
+  RefreshGrades();
+  RecordSelectionKeys();
+}
+
+void MusicWheelItem::DispatchSet(const Message& msg) {
+#if PROFLITE_ENABLED && PROFLITE_PER_CHILD
+  // Same as ActorFrame::HandleMessage for a non-broadcast message: our own
+  // commands first, then every child, but timed per child so the cost of the
+  // "Set" fan-out can be attributed to the theme parts that handle it.
+  Actor::HandleMessage(msg);
+  for (Actor* child : GetChildren()) {
+    const uint64_t t0 = ProfLite::Now();
+    child->HandleMessage(msg);
+    ProfLite::Add("Wheel.Item.Set." + child->GetName(), ProfLite::Now() - t0);
+  }
+#else
+  this->HandleMessage(msg);
+#endif
 }
 
 /*

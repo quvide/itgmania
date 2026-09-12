@@ -1,4 +1,5 @@
 #include "ScreenSelectMusic.h"
+#include "ProfLite.h"
 
 #include <algorithm>
 #include <cmath>
@@ -351,6 +352,7 @@ ScreenSelectMusic::~ScreenSelectMusic() {
 // If bForce is true, the next request will be started even if it might cause a
 // skip.
 void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
+  PROF_SCOPE("SSM.CheckBackgroundRequests");
   if (g_bCDTitleWaiting) {
     // The CDTitle is normally very small, so we don't bother waiting to display
     // it.
@@ -462,6 +464,7 @@ void ScreenSelectMusic::CheckBackgroundRequests(bool bForce) {
 }
 
 void ScreenSelectMusic::Update(float fDeltaTime) {
+  PROF_SCOPE("SSM.Update");
   if (!IsTransitioning()) {
     if (IDLE_COMMENT_SECONDS > 0 &&
         m_timerIdleComment.Ago() >= IDLE_COMMENT_SECONDS) {
@@ -1645,6 +1648,7 @@ void ScreenSelectMusic::ConfirmedCancel(ScreenMessage smSendWhenDone) {
 
 void ScreenSelectMusic::AfterStepsOrTrailChange(
     const std::vector<PlayerNumber>& vpns) {
+  PROF_SCOPE("SSM.AfterStepsOrTrailChange");
   if (TWO_PART_CONFIRMS_ONLY &&
       m_SelectionState == SelectionState_SelectingSteps) {
     // if TWO_PART_CONFIRMS_ONLY, changing difficulties unsets the song. -aj
@@ -1662,7 +1666,12 @@ void ScreenSelectMusic::AfterStepsOrTrailChange(
       Steps* pSteps = m_vpSteps.empty() ? nullptr : m_vpSteps[m_iSelection[pn]];
 
       GAMESTATE->m_pCurSteps[pn].Set(pSteps);
-      GAMESTATE->m_pCurTrail[pn].Set(nullptr);
+      // The trail is already null in song mode; BroadcastOnChangePtr::Set
+      // broadcasts regardless, and every listener (all wheel items included)
+      // would do a full refresh for nothing.
+      if (GAMESTATE->m_pCurTrail[pn].Get() != nullptr) {
+        GAMESTATE->m_pCurTrail[pn].Set(nullptr);
+      }
 
       int iScore = 0;
       if (pSteps) {
@@ -1682,7 +1691,10 @@ void ScreenSelectMusic::AfterStepsOrTrailChange(
       Trail* pTrail =
           m_vpTrails.empty() ? nullptr : m_vpTrails[m_iSelection[pn]];
 
-      GAMESTATE->m_pCurSteps[pn].Set(nullptr);
+      // Mirror of the song-mode case above.
+      if (GAMESTATE->m_pCurSteps[pn].Get() != nullptr) {
+        GAMESTATE->m_pCurSteps[pn].Set(nullptr);
+      }
       GAMESTATE->m_pCurTrail[pn].Set(pTrail);
 
       int iScore = 0;
@@ -1809,18 +1821,26 @@ static bool IsVideoFile(const std::string& path) {
 }
 
 void ScreenSelectMusic::AfterMusicChange() {
+  PROF_SCOPE("SSM.AfterMusicChange");
   if (!m_MusicWheel.IsRouletting()) {
     m_MenuTimer->Stall();
   }
 
   Song* pSong = m_MusicWheel.GetSelectedSong();
-  GAMESTATE->m_pCurSong.Set(pSong);
+  {
+    PROF_SCOPE("SSM.AMC.CurSongSet(bcast)");
+    GAMESTATE->m_pCurSong.Set(pSong);
+  }
   if (pSong) {
     GAMESTATE->m_pPreferredSong = pSong;
   }
 
   Course* pCourse = m_MusicWheel.GetSelectedCourse();
-  GAMESTATE->m_pCurCourse.Set(pCourse);
+  // In song mode this is nil to nil on every step; BroadcastOnChangePtr::Set
+  // would still broadcast CurrentCourseChanged to every listener.
+  if (GAMESTATE->m_pCurCourse.Get() != pCourse) {
+    GAMESTATE->m_pCurCourse.Set(pCourse);
+  }
   if (pCourse) {
     GAMESTATE->m_pPreferredCourse = pCourse;
   }
@@ -1972,7 +1992,10 @@ void ScreenSelectMusic::AfterMusicChange() {
           FAIL_M(ssprintf("Invalid preview mode: %i", pmode));
       }
 
-      SongUtil::GetPlayableSteps(pSong, m_vpSteps);
+      {
+        PROF_SCOPE("SSM.AMC.GetPlayableSteps");
+        SongUtil::GetPlayableSteps(pSong, m_vpSteps);
+      }
       if (m_vpSteps.empty()) {
         // LuaHelpers::ReportScriptError("GetPlayableSteps returned nothing.");
       }
@@ -2054,6 +2077,7 @@ void ScreenSelectMusic::AfterMusicChange() {
     g_bCDTitleWaiting = true;
   }
 
+  const uint64_t proflite_t_banner = ProfLite::Now();
   g_bBannerWaiting = false;
   if (bWantBanner) {
     LOG->Trace("LoadFromCachedBanner(%s)", g_sBannerPath.c_str());
@@ -2080,6 +2104,8 @@ void ScreenSelectMusic::AfterMusicChange() {
   }
 
   // Don't stop music if it's already playing the right file.
+  ProfLite::Add("SSM.AMC.Banner", ProfLite::Now() - proflite_t_banner);
+  const uint64_t proflite_t_music = ProfLite::Now();
   g_bSampleMusicWaiting = false;
   if (!m_MusicWheel.IsRouletting() &&
       SOUND->GetMusicPath() != m_sSampleMusicToPlay) {
@@ -2092,6 +2118,7 @@ void ScreenSelectMusic::AfterMusicChange() {
     }
   }
 
+  ProfLite::Add("SSM.AMC.SampleMusic", ProfLite::Now() - proflite_t_music);
   g_StartedLoadingAt.Touch();
 
   std::vector<PlayerNumber> vpns;

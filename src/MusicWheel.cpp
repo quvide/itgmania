@@ -1,4 +1,5 @@
 #include "MusicWheel.h"
+#include "ProfLite.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -1550,6 +1551,7 @@ void MusicWheel::UpdateSwitch() {
 }
 
 void MusicWheel::ChangeMusic(int iDist) {
+  PROF_SCOPE("Wheel.ChangeMusic");
   m_iSelection += iDist;
   wrap(m_iSelection, m_CurWheelItemData.size());
 

@@ -1,4 +1,7 @@
 #include "MessageManager.h"
+#include "ProfLite.h"
+#include <typeinfo>
+#include "Actor.h"
 
 #include <map>
 #include <set>
@@ -212,6 +215,31 @@ void MessageManager::HandleQueuedBroadcasts() {
   }
 }
 
+// Profiling: for the messages that fan out on every music wheel step, attribute
+// time per listener so engine (MusicWheelItem) and theme (Lua actors) cost can be
+// told apart. Other messages are only timed as a whole.
+static bool ProfSplitBySubscriber(const std::string& name) {
+  static const std::set<std::string> split = {
+      "CurrentSongChanged",         "CurrentCourseChanged",
+      "CurrentStepsP1Changed",      "CurrentStepsP2Changed",
+      "CurrentTrailP1Changed",      "CurrentTrailP2Changed",
+      "PreferredDifficultyP1Changed", "PreferredDifficultyP2Changed",
+      "PlayerJoined",               "PlayerUnjoined",
+      "PlayerProfileSet",
+  };
+  return split.count(name) != 0;
+}
+
+static std::string ProfSubscriberLabel(IMessageSubscriber* subscriber) {
+  if (Actor* actor = dynamic_cast<Actor*>(subscriber)) {
+    std::string lineage = actor->GetLineage();
+    if (!lineage.empty()) {
+      return lineage;
+    }
+  }
+  return typeid(*subscriber).name();
+}
+
 void MessageManager::Broadcast(Message& msg) const {
   if (m_Logging) {
     LOG->Trace("MESSAGEMAN:Broadcast: %s", msg.GetName().c_str());
@@ -226,8 +254,21 @@ void MessageManager::Broadcast(Message& msg) const {
     return;
   }
 
+  PROF_SCOPE("Msg." + msg.GetName());
+  const bool split = PROFLITE_ENABLED && ProfSplitBySubscriber(msg.GetName());
+  if (split) {
+    PROF_COUNT("Msg." + msg.GetName() + ".subscribers", iter->second.size());
+  }
+
   for (IMessageSubscriber* subscriber : iter->second) {
+    if (!split) {
+      subscriber->HandleMessage(msg);
+      continue;
+    }
+    const uint64_t t0 = ProfLite::Now();
     subscriber->HandleMessage(msg);
+    ProfLite::Add("Msg." + msg.GetName() + "." + ProfSubscriberLabel(subscriber),
+                  ProfLite::Now() - t0);
   }
 }
 

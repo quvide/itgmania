@@ -4,6 +4,8 @@
 #include <string>
 
 #include "AutoActor.h"
+#include "Difficulty.h"
+#include "GameConstantsAndTypes.h"
 #include "BitmapText.h"
 #include "GameCommand.h"
 #include "Group.h"
@@ -50,10 +52,29 @@ class MusicWheelItem : public WheelItemBase {
   virtual void LoadFromWheelItemData(
       const WheelItemBaseData* pWID, int iIndex, bool bHasFocus,
       int iDrawIndex);
+  virtual void Update(float fDeltaTime);
   virtual void HandleMessage(const Message& msg);
   void RefreshGrades();
 
  private:
+  // Re-send "Set" to every child and refresh the grade displays from the
+  // current GAMESTATE (steps, difficulty, profile). Deferred to Update() so
+  // that the several broadcasts one wheel step produces (steps and trail for
+  // each player) cost one refresh per frame instead of one each.
+  void RefreshFromGameState();
+  // HandleMessage(msg) for the "Set" message, with per-child profiling.
+  void DispatchSet(const Message& msg);
+  // What the item's contents depend on besides its own song: each player's
+  // selected difficulty and steps type (the same derivation RefreshGrades
+  // uses). Recorded at every full Set so a queued refresh can be skipped when
+  // none of it changed, which is the case on an ordinary scroll step.
+  void GetPlayerSelectionKey(PlayerNumber p, Difficulty& dc, StepsType& st) const;
+  void RecordSelectionKeys();
+  bool m_bRefreshPending = false;
+  bool m_bForceRefresh = false;
+  bool m_bHasFocus = false;
+  Difficulty m_LastDifficulty[NUM_PLAYERS];
+  StepsType m_LastStepsType[NUM_PLAYERS];
   ThemeMetric<bool> GRADES_SHOW_MACHINE;
 
   AutoActor m_sprColorPart[NUM_MusicWheelItemType];

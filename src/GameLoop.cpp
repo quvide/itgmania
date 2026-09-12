@@ -1,4 +1,5 @@
 #include "GameLoop.h"
+#include "ProfLite.h"
 
 #include <cmath>
 #include <string>
@@ -255,29 +256,62 @@ void GameLoop::UpdateAllButDraw() {
 
   // Update SOUNDMAN early (before any RageSound::GetPosition calls), to flush
   // position data.
-  SOUNDMAN->Update();
+  {
+    PROF_SCOPE("Loop.SOUNDMAN");
+    SOUNDMAN->Update();
+  }
 
   /* Update song beat information -before- calling update on all the classes
    * that depend on it. If you don't do this first, the classes are all acting
    * on old information and will lag. (but no longer fatally, due to
    * timestamping -glenn) */
-  SOUND->Update(fDeltaTime);
-  TEXTUREMAN->Update(fDeltaTime);
-  GAMESTATE->Update(fDeltaTime);
-  NETWORK->Update();
-  SCREENMAN->Update(fDeltaTime);
-  MEMCARDMAN->Update();
-  SYNCMAN->Update();
+  {
+    PROF_SCOPE("Loop.SOUND");
+    SOUND->Update(fDeltaTime);
+  }
+  {
+    PROF_SCOPE("Loop.TEXTUREMAN");
+    TEXTUREMAN->Update(fDeltaTime);
+  }
+  {
+    PROF_SCOPE("Loop.GAMESTATE");
+    GAMESTATE->Update(fDeltaTime);
+  }
+  {
+    PROF_SCOPE("Loop.NETWORK");
+    NETWORK->Update();
+  }
+  {
+    PROF_SCOPE("Loop.SCREENMAN");
+    SCREENMAN->Update(fDeltaTime);
+  }
+  {
+    PROF_SCOPE("Loop.MEMCARDMAN");
+    MEMCARDMAN->Update();
+  }
+  {
+    PROF_SCOPE("Loop.SYNCMAN");
+    SYNCMAN->Update();
+  }
 
   /* Important: Process input AFTER updating game logic, or input will be
    * acting on song beat from last frame */
-  HandleInputEvents(fDeltaTime);
+  {
+    PROF_SCOPE("Loop.Input");
+    HandleInputEvents(fDeltaTime);
+  }
 
   // Update the lights
-  LIGHTSMAN->Update(fDeltaTime);
+  {
+    PROF_SCOPE("Loop.LIGHTSMAN");
+    LIGHTSMAN->Update(fDeltaTime);
+  }
 
   // Process broadcast queue from other threads
-  MESSAGEMAN->HandleQueuedBroadcasts();
+  {
+    PROF_SCOPE("Loop.QueuedBroadcasts");
+    MESSAGEMAN->HandleQueuedBroadcasts();
+  }
 }
 
 void GameLoop::RunGameLoop() {
@@ -302,11 +336,25 @@ void GameLoop::RunGameLoop() {
       ArchHooks::SetUserQuit();
     }
 
-    UpdateAllButDraw();
+    const uint64_t proflite_frame_t0 = ProfLite::Now();
+    {
+      PROF_SCOPE("Frame.Update");
+      UpdateAllButDraw();
+    }
 
     CallEveryNFrames(500, CheckInputDevices);
 
-    SCREENMAN->Draw();
+    {
+      PROF_SCOPE("Frame.Draw");
+      SCREENMAN->Draw();
+    }
+    {
+      const uint64_t dt = ProfLite::Now() - proflite_frame_t0;
+      ProfLite::Add("Frame.Total", dt);
+      if (dt > 16700) PROF_COUNT("Frame.over16.7ms", 1);
+      if (dt > 33400) PROF_COUNT("Frame.over33ms", 1);
+      PROF_MAYBE_DUMP();
+    }
   }
 
   // If we ended mid-game, finish up.

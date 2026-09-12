@@ -1,4 +1,5 @@
 #include "WheelBase.h"
+#include "ProfLite.h"
 
 #include <algorithm>
 #include <climits>
@@ -147,6 +148,7 @@ void WheelBase::SetPositions() {
 }
 
 void WheelBase::Update(float fDeltaTime) {
+  PROF_SCOPE("Wheel.Update");
   ActorFrame::Update(fDeltaTime);
 
   // If tweens aren't controlling the position of the wheel, set positions.

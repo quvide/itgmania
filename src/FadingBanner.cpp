@@ -1,4 +1,5 @@
 #include "FadingBanner.h"
+#include "ProfLite.h"
 
 #include <string>
 
@@ -73,6 +74,7 @@ void FadingBanner::DrawPrimitives() {
 }
 
 void FadingBanner::Load(RageTextureID ID, bool bLowResToHighRes) {
+  PROF_SCOPE("Banner.Load(texture)");
   BeforeChange(bLowResToHighRes);
   m_Banner[m_iIndexLatest].Load(ID);
 
@@ -119,6 +121,7 @@ void FadingBanner::BeforeChange(bool bLowResToHighRes) {
 /* If this returns true, a low-resolution banner was loaded, and the full-res
  * banner should be loaded later. */
 bool FadingBanner::LoadFromCachedBanner(const std::string& path) {
+  PROF_SCOPE("Banner.LoadFromCached");
   // If we're already on the given banner, don't fade again.
   if (path != "" && m_Banner[m_iIndexLatest].GetTexturePath() == path) {
     return false;

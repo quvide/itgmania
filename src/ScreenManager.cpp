@@ -60,6 +60,7 @@
  */
 
 #include "ScreenManager.h"
+#include "ProfLite.h"
 
 #include <algorithm>
 #include <map>
@@ -471,13 +472,20 @@ void ScreenManager::Update(float fDeltaTime) {
   }
 
   // Update screens.
-  for (const LoadedScreen& screen : g_ScreenStack) {
-    screen.m_pScreen->Update(fDeltaTime);
+  {
+    PROF_SCOPE("SM.UpdateScreens");
+    for (const LoadedScreen& screen : g_ScreenStack) {
+      screen.m_pScreen->Update(fDeltaTime);
+    }
   }
 
-  g_pSharedBGA->Update(fDeltaTime);
+  {
+    PROF_SCOPE("SM.SharedBGA");
+    g_pSharedBGA->Update(fDeltaTime);
+  }
 
   for (Screen* overlay : g_OverlayScreens) {
+    PROF_SCOPE("SM.Overlay." + overlay->GetName());
     overlay->Update(fDeltaTime);
   }
 
@@ -525,7 +533,10 @@ void ScreenManager::Draw() {
     overlayScreen->Draw();
   }
 
-  DISPLAY->EndFrame();
+  {
+    PROF_SCOPE("Frame.Draw.EndFrame(vsync)");
+    DISPLAY->EndFrame();
+  }
 }
 
 void ScreenManager::Input(const InputEventPlus& input) {
